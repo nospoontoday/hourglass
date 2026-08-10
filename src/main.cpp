@@ -23,10 +23,19 @@
 
 // pin constants
 const int DATA_PIN = 5;
+#if defined(ARDUINO_ARCH_ESP32)
+const int CLK_PIN = 18;
+#else
 const int CLK_PIN = 3;
+#endif
 const int LOAD_PIN = 4;
+#if defined(ARDUINO_ARCH_ESP32)
+const int X_PIN = A0;
+const int Y_PIN = A3;
+#else
 const int X_PIN = A1;
 const int Y_PIN = A2;
+#endif
 const int BUZZ_PIN = 14;
 
 bool alarmWentOff = false;
