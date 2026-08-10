@@ -219,14 +219,14 @@ int getTopMatrixLong() {
   return (getGravity() == 90) ? MATRIX_A : MATRIX_B;
 }
 int getBottomMatrixLong() {
-  return (getGravity() != 90) ? MATRIX_B : MATRIX_A;
+  return (getGravity() == 90) ? MATRIX_B : MATRIX_A;
 }
 
 void resetTime() {
   for (byte i = 0; i < 2; i++) {
     lc.clearDisplay(i);
   }
-  fill(getTopMatrixLong(), 60);
+  fill(getTopMatrixLong(), 64);
   d.Delay(getDelayDrop() * 1000);
 }
 
@@ -256,11 +256,9 @@ boolean dropParticleLong() {
   if (d.Timeout()) {
     d.Delay(getDelayDrop() * 1000);
     if (gravity == 0 || gravity == 180) {
-      if ((lc.getRawXY(MATRIX_A, 0, 0) && !lc.getRawXY(MATRIX_B, 7, 7)) ||
-          (!lc.getRawXY(MATRIX_A, 0, 0) && lc.getRawXY(MATRIX_B, 7, 7))
-         ) {
-        lc.invertRawXY(MATRIX_A, 0, 0);
+      if (lc.getRawXY(MATRIX_B, 7, 7) && !lc.getRawXY(MATRIX_A, 0, 0)) {
         lc.invertRawXY(MATRIX_B, 7, 7);
+        lc.invertRawXY(MATRIX_A, 0, 0);
         tone(BUZZ_PIN, 440, 10);
         return true;
       }
