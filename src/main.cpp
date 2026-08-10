@@ -4,6 +4,12 @@
 #include <Adafruit_Sensor.h>
 #include "LedControl.h"
 #include "Delay.h"
+#if defined(ARDUINO_ARCH_ESP32)
+#include <WiFi.h>
+#include <esp_now.h>
+#include <cstring>
+#include "espnow/EspNowDriver.h"
+#endif
 
 #define MATRIX_A  1
 #define MATRIX_B  0
@@ -16,7 +22,16 @@
 #define ROTATION_OFFSET 90
 #define DELAY_LONG 100
 #define SIM_MIN_DELAY 10
+#if defined(ARDUINO_ARCH_ESP32)
+// Linked cabinet station index (cabinet auto-assigns first free station = 0).
+#define MY_STATION_ID 0
+#define LINK_TIMEOUT_MS 10000UL
+#define STATUS_TX_INTERVAL_MS 5000UL
+#define HEARTBEAT_TX_INTERVAL_MS 10000UL
+#define BATTERY_LEVEL_PCT 85
+#else
 #define COUNTDOWN_MS 60000
+#endif
 
 #define DEBUG_OUTPUT 1
 
@@ -46,7 +61,18 @@ int resetCounter = 0;
 unsigned long countdownEnd;
 NonBlockDelay d;
 
+#if defined(ARDUINO_ARCH_ESP32)
+EspNowDriver espNow;
+unsigned long lastStatusTx = 0;
+unsigned long lastHeartbeatTx = 0;
+bool chargingActive = false;
+unsigned long lastStationFrame = 0;
+StationState lastPortState = AVAILABLE;
+uint8_t lastSequence = 0xFF;
+#endif
+
 Adafruit_MPU6050 mpu;
+bool mpuOk = false;
 LedControl lc = LedControl(DATA_PIN, CLK_PIN, LOAD_PIN, 2);
 
 
@@ -175,7 +201,11 @@ void fill(int addr, int maxcount) {
 
 int getGravity() {////////////////////////////////////////////////////////////////
 
-    /* Get new sensor events with the readings */
+  if (!mpuOk) {
+    return gravity;
+  }
+
+  /* Get new sensor events with the readings */
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -239,7 +269,11 @@ void resetTime() {
     lc.clearDisplay(i);
   }
   fill(getTopMatrixLong(), 64);
+#if defined(ARDUINO_ARCH_ESP32)
+  countdownEnd = 0;
+#else
   countdownEnd = millis() + COUNTDOWN_MS;
+#endif
   d.Delay(getDropIntervalMs());
 }
 
@@ -295,6 +329,11 @@ bool updateMatrixLong() {
 }
 
 boolean dropParticleLong() {
+#if defined(ARDUINO_ARCH_ESP32)
+  if (!mpuOk && !chargingActive) {
+    return false;
+  }
+#endif
   if (d.Timeout()) {
     if (gravity == 0 || gravity == 180) {
       int top = (gravity == 180) ? MATRIX_B : MATRIX_A;
@@ -321,20 +360,169 @@ void alarm() {
   }
 }
 
+#if defined(ARDUINO_ARCH_ESP32)
+
+static void sendStationStatus() {
+  StationStatusPacket payload;
+  payload.stationIndex = (uint8_t)MY_STATION_ID;
+  payload.state = lastPortState;
+  unsigned long remaining = (chargingActive && countdownEnd > millis()) ? (countdownEnd - millis()) : 0;
+  payload.remainingTime = (uint16_t)((remaining + 999) / 1000);
+  payload.batteryLevel = BATTERY_LEVEL_PCT;
+
+  PacketHeader header;
+  header.protocolVersion = PROTOCOL_VERSION;
+  header.type = PacketType::STATION_STATUS;
+  header.sourceId = HOURGLASS_SELF_ID;
+  header.destinationId = CABINET_ID;
+  header.payloadSize = sizeof(StationStatusPacket);
+
+  uint8_t txBuf[sizeof(PacketHeader) + sizeof(StationStatusPacket)];
+  memcpy(txBuf, &header, sizeof(PacketHeader));
+  memcpy(txBuf + sizeof(PacketHeader), &payload, sizeof(StationStatusPacket));
+
+  espNow.send(CABINET_ID, txBuf, sizeof(txBuf));
+}
+
+static void sendHeartbeat() {
+  HeartbeatPacket payload;
+  payload.uptimeMs = millis();
+
+  PacketHeader header;
+  header.protocolVersion = PROTOCOL_VERSION;
+  header.type = PacketType::HEARTBEAT;
+  header.sourceId = HOURGLASS_SELF_ID;
+  header.destinationId = CABINET_ID;
+  header.payloadSize = sizeof(HeartbeatPacket);
+
+  uint8_t txBuf[sizeof(PacketHeader) + sizeof(HeartbeatPacket)];
+  memcpy(txBuf, &header, sizeof(PacketHeader));
+  memcpy(txBuf + sizeof(PacketHeader), &payload, sizeof(HeartbeatPacket));
+
+  espNow.send(CABINET_ID, txBuf, sizeof(txBuf));
+}
+
+static void processIncoming() {
+  uint8_t buf[64];
+  uint8_t len;
+  DeviceId src;
+
+  while (espNow.receive(buf, sizeof(buf), &len, &src)) {
+    Serial.print("[HW] RX from=");
+    Serial.print(src);
+    Serial.print(" len=");
+    Serial.println(len);
+
+    if (len < sizeof(PacketHeader)) {
+      Serial.println("[HW] RX dropped: too short");
+      continue;
+    }
+
+    PacketHeader hdr;
+    memcpy(&hdr, buf, sizeof(PacketHeader));
+
+    if (hdr.protocolVersion != PROTOCOL_VERSION) {
+      Serial.println("[HW] RX dropped: protocol version mismatch");
+      continue;
+    }
+    if (hdr.sourceId != CABINET_ID) {
+      Serial.println("[HW] RX dropped: unexpected source");
+      continue;
+    }
+    if (hdr.destinationId != HOURGLASS_SELF_ID) {
+      Serial.println("[HW] RX dropped: not addressed to me");
+      continue;
+    }
+
+    Serial.print("[HW] RX type=0x");
+    Serial.println(static_cast<uint8_t>(hdr.type), HEX);
+
+    switch (hdr.type) {
+      case PacketType::STATION_STATUS: {
+        if (len < sizeof(PacketHeader) + sizeof(StationPacket)) break;
+
+        StationPacket pkt;
+        memcpy(&pkt, buf + sizeof(PacketHeader), sizeof(pkt));
+
+        Serial.print("[HW] RX station=");
+        Serial.print(pkt.stationId);
+        Serial.print(" state=");
+        Serial.print(pkt.portState);
+        Serial.print(" time=");
+        Serial.print(pkt.remainingSeconds);
+        Serial.print(" seq=");
+        Serial.println(pkt.sequenceNumber);
+
+        lastStationFrame = millis();
+        lastPortState = static_cast<StationState>(pkt.portState);
+
+        if (lastSequence != 0xFF) {
+          uint8_t gap = (uint8_t)(pkt.sequenceNumber - lastSequence - 1);
+          if (gap) {
+            Serial.print("[HW] gap=");
+            Serial.println(gap);
+          }
+        }
+        lastSequence = pkt.sequenceNumber;
+
+        if (pkt.portState == CHARGING) {
+          if (!chargingActive) {
+            resetTime();
+            roundOver = false;
+            alarmWentOff = false;
+          }
+          chargingActive = true;
+          if (pkt.remainingSeconds == 0) {
+            countdownEnd = millis();
+          } else {
+            countdownEnd = millis() + (unsigned long)pkt.remainingSeconds * 1000UL;
+          }
+        } else {
+          if (chargingActive || roundOver) {
+            resetTime();
+          }
+          chargingActive = false;
+          roundOver = false;
+          alarmWentOff = false;
+          countdownEnd = 0;
+        }
+        break;
+      }
+
+      case PacketType::HEARTBEAT_ACK:
+        Serial.println("[HW] RX heartbeat ack");
+        break;
+
+      default:
+        Serial.print("[HW] RX unhandled type=0x");
+        Serial.println(static_cast<uint8_t>(hdr.type), HEX);
+        break;
+    }
+  }
+}
+
+#endif
+
 /**
    Setup
 */
 void setup() {
   Serial.begin(9600);
     // Try to initialize!
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
+  mpuOk = mpu.begin();
+  for (int attempt = 1; attempt <= 5 && !mpuOk; attempt++) {
+    Serial.print("MPU6050 not found, retry ");
+    Serial.println(attempt);
+    delay(200);
+    mpuOk = mpu.begin();
   }
-  Serial.println("MPU6050 Found!");
+  if (!mpuOk) {
+    Serial.println("Failed to find MPU6050 chip - continuing without orientation sensor");
+  } else {
+    Serial.println("MPU6050 Found!");
+  }
 
+  if (mpuOk) {
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   Serial.print("Accelerometer range set to: ");
   switch (mpu.getAccelerometerRange()) {
@@ -393,12 +581,31 @@ void setup() {
     Serial.println("5 Hz");
     break;
   }
+  }
   randomSeed(analogRead(A3));
 
   for (byte i = 0; i < 2; i++) {
     lc.shutdown(i, false);
     lc.setIntensity(i, 1);
   }
+
+#if defined(ARDUINO_ARCH_ESP32)
+  espNow.begin();
+  Serial.print("[HW] MAC = ");
+  Serial.println(WiFi.macAddress());
+  {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    bool macOk = true;
+    for (int i = 0; i < 6; ++i) {
+      if (mac[i] != EXPECTED_SELF_MAC[i]) { macOk = false; break; }
+    }
+    if (!macOk) {
+      Serial.println("[HW] WARNING: MAC differs from cabinet config (id=1, 20:50:0D:08:25:90).");
+      Serial.println("[HW] Update the cabinet PEER_MACS table to match this MAC.");
+    }
+  }
+#endif
 
   resetTime();
 }
@@ -408,9 +615,32 @@ void setup() {
 */
 void loop() {
   delay(simDelayMs());
+  unsigned long now = millis();
 
   gravity = getGravity();
   lc.setRotation((ROTATION_OFFSET + gravity) % 360);
+
+#if defined(ARDUINO_ARCH_ESP32)
+  processIncoming();
+
+  if (now - lastStatusTx >= STATUS_TX_INTERVAL_MS) {
+    lastStatusTx = now;
+    sendStationStatus();
+  }
+  if (now - lastHeartbeatTx >= HEARTBEAT_TX_INTERVAL_MS) {
+    lastHeartbeatTx = now;
+    sendHeartbeat();
+  }
+
+  if (chargingActive && lastStationFrame > 0 && now - lastStationFrame > LINK_TIMEOUT_MS) {
+    Serial.println("[HW] Link lost - countdown stopped");
+    chargingActive = false;
+    roundOver = false;
+    alarmWentOff = false;
+    countdownEnd = 0;
+    resetTime();
+  }
+#endif
 
   if (gravity != lastPrintedGravity) {
     lastPrintedGravity = gravity;
@@ -425,13 +655,19 @@ void loop() {
     }
   }
 
-  unsigned long remaining = (countdownEnd > millis()) ? (countdownEnd - millis()) : 0;
-  int secs = (int)((remaining + 999) / 1000);
-  if (secs != lastPrintedSecond) {
-    lastPrintedSecond = secs;
-    Serial.print("T-");
-    Serial.println(secs);
+#if defined(ARDUINO_ARCH_ESP32)
+  if (chargingActive) {
+#endif
+    unsigned long remaining = (countdownEnd > now) ? (countdownEnd - now) : 0;
+    int secs = (int)((remaining + 999) / 1000);
+    if (secs != lastPrintedSecond) {
+      lastPrintedSecond = secs;
+      Serial.print("T-");
+      Serial.println(secs);
+    }
+#if defined(ARDUINO_ARCH_ESP32)
   }
+#endif
 
   if (roundOver) {
     return;
@@ -440,7 +676,11 @@ void loop() {
   updateMatrixLong();
   dropParticleLong();
 
+#if defined(ARDUINO_ARCH_ESP32)
+  if (chargingActive && millis() >= countdownEnd) {
+#else
   if (millis() >= countdownEnd) {
+#endif
     roundOver = true;
     finishDrain();
     if ((gravity == 0 || gravity == 180) && !alarmWentOff) {
@@ -448,4 +688,13 @@ void loop() {
       alarm();
     }
   }
+
+#if defined(ARDUINO_ARCH_ESP32)
+  if (!chargingActive && !roundOver) {
+    int top = getTopMatrixLong();
+    if (countParticles(top) == 0) {
+      resetTime();
+    }
+  }
+#endif
 }
