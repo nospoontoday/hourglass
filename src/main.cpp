@@ -15,6 +15,8 @@
 // This takes into account how the matrixes are mounted
 #define ROTATION_OFFSET 90
 #define DELAY_LONG 100
+#define SIM_MIN_DELAY 10
+#define COUNTDOWN_MS 60000
 
 #define DEBUG_OUTPUT 1
 
@@ -36,21 +38,16 @@ const int Y_PIN = A2;
 const int BUZZ_PIN = 14;
 
 bool alarmWentOff = false;
-byte delayHours = 0;
-byte delayMinutes = 1;
+bool roundOver = false;
 int gravity;
+int lastPrintedSecond = -1;
+int lastPrintedGravity = -1;
 int resetCounter = 0;
+unsigned long countdownEnd;
 NonBlockDelay d;
 
 Adafruit_MPU6050 mpu;
 LedControl lc = LedControl(DATA_PIN, CLK_PIN, LOAD_PIN, 2);
-
-/**
-   Get delay between particle drops (in seconds)
-*/
-long getDelayDrop() {
-  return delayMinutes + delayHours * 60;
-}
 
 
 #if DEBUG_OUTPUT
@@ -197,19 +194,15 @@ int getGravity() {//////////////////////////////////////////////////////////////
   //int x = analogRead(X_PIN);
   //int y = analogRead(Y_PIN);
   if (y < ACC_THRESHOLD_LOW)  {
-    Serial.println("0");
     return 0;
   }
   if (x > ACC_THRESHOLD_HIGH) {
-    Serial.println("90");
     return 90;
   }
   if (y > ACC_THRESHOLD_HIGH) {
-    Serial.println("180");
     return 180;
   }
   if (x < ACC_THRESHOLD_LOW)  {
-    Serial.println("270");
     return 270;
   }
   return gravity;
@@ -222,12 +215,61 @@ int getBottomMatrixLong() {
   return (getGravity() == 180) ? MATRIX_A : MATRIX_B;
 }
 
+long getDropIntervalMs() {
+  if (gravity == 0 || gravity == 180) {
+    int top = (gravity == 180) ? MATRIX_B : MATRIX_A;
+    int n = countParticles(top);
+    if (n > 0) {
+      unsigned long now = millis();
+      if (countdownEnd > now) {
+        long interval = (countdownEnd - now) / n;
+        if (n == 1 && interval > DELAY_LONG) {
+          interval -= DELAY_LONG;
+        }
+        if (interval < 20) interval = 20;
+        return interval;
+      }
+    }
+  }
+  return 1000;
+}
+
 void resetTime() {
   for (byte i = 0; i < 2; i++) {
     lc.clearDisplay(i);
   }
   fill(getTopMatrixLong(), 64);
-  d.Delay(getDelayDrop() * 1000);
+  countdownEnd = millis() + COUNTDOWN_MS;
+  d.Delay(getDropIntervalMs());
+}
+
+bool updateMatrixLong();
+
+unsigned long simDelayMs() {
+  if (gravity == 0 || gravity == 180) {
+    long interval = getDropIntervalMs();
+    if (interval <= 0) return DELAY_LONG;
+    unsigned long sim = interval / 2;
+    if (sim > DELAY_LONG) return DELAY_LONG;
+    if (sim < SIM_MIN_DELAY) return SIM_MIN_DELAY;
+    return sim;
+  }
+  return DELAY_LONG;
+}
+
+void finishDrain() {
+  if (!(gravity == 0 || gravity == 180)) return;
+  int top = (gravity == 180) ? MATRIX_B : MATRIX_A;
+  int bottom = (gravity == 180) ? MATRIX_A : MATRIX_B;
+  byte topCoord = (top == MATRIX_A) ? 0 : 7;
+  byte bottomCoord = (bottom == MATRIX_A) ? 0 : 7;
+  for (int guard = 0; guard < 500 && countParticles(top) > 0; guard++) {
+    updateMatrixLong();
+    if (lc.getRawXY(top, topCoord, topCoord) && !lc.getRawXY(bottom, bottomCoord, bottomCoord)) {
+      lc.invertRawXY(top, topCoord, topCoord);
+      lc.invertRawXY(bottom, bottomCoord, bottomCoord);
+    }
+  }
 }
 
 bool updateMatrixLong() {
@@ -254,7 +296,6 @@ bool updateMatrixLong() {
 
 boolean dropParticleLong() {
   if (d.Timeout()) {
-    d.Delay(getDelayDrop() * 1000);
     if (gravity == 0 || gravity == 180) {
       int top = (gravity == 180) ? MATRIX_B : MATRIX_A;
       int bottom = (gravity == 180) ? MATRIX_A : MATRIX_B;
@@ -264,9 +305,11 @@ boolean dropParticleLong() {
         lc.invertRawXY(top, topCoord, topCoord);
         lc.invertRawXY(bottom, bottomCoord, bottomCoord);
         tone(BUZZ_PIN, 440, 10);
+        d.Delay(getDropIntervalMs());
         return true;
       }
     }
+    d.Delay(SIM_MIN_DELAY);
   }
   return false;
 }
@@ -364,24 +407,45 @@ void setup() {
    Main loop
 */
 void loop() {
-  delay(DELAY_LONG);
-
-
-
+  delay(simDelayMs());
 
   gravity = getGravity();
   lc.setRotation((ROTATION_OFFSET + gravity) % 360);
 
-  bool moved = updateMatrixLong();
-  bool dropped = dropParticleLong();
-
-
-  if (!moved && !dropped && !alarmWentOff && (countParticles(getTopMatrixLong()) == 0)) {
-    alarmWentOff = true;
-    alarm();
+  if (gravity != lastPrintedGravity) {
+    lastPrintedGravity = gravity;
+    Serial.print("Gravity: ");
+    Serial.println(gravity);
+    if ((gravity == 0 || gravity == 180) && countdownEnd > millis()) {
+      Serial.print("Top: ");
+      Serial.print(countParticles(getTopMatrixLong()));
+      Serial.print(" grains, ~");
+      Serial.print(getDropIntervalMs());
+      Serial.println("ms/drop");
+    }
   }
-  if (dropped) {
-    alarmWentOff = false;
+
+  unsigned long remaining = (countdownEnd > millis()) ? (countdownEnd - millis()) : 0;
+  int secs = (int)((remaining + 999) / 1000);
+  if (secs != lastPrintedSecond) {
+    lastPrintedSecond = secs;
+    Serial.print("T-");
+    Serial.println(secs);
   }
 
+  if (roundOver) {
+    return;
+  }
+
+  updateMatrixLong();
+  dropParticleLong();
+
+  if (millis() >= countdownEnd) {
+    roundOver = true;
+    finishDrain();
+    if ((gravity == 0 || gravity == 180) && !alarmWentOff) {
+      alarmWentOff = true;
+      alarm();
+    }
+  }
 }
