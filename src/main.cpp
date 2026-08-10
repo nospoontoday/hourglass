@@ -216,10 +216,10 @@ int getGravity() {//////////////////////////////////////////////////////////////
 }
 
 int getTopMatrixLong() {
-  return (getGravity() == 90) ? MATRIX_A : MATRIX_B;
+  return (getGravity() == 180) ? MATRIX_B : MATRIX_A;
 }
 int getBottomMatrixLong() {
-  return (getGravity() == 90) ? MATRIX_B : MATRIX_A;
+  return (getGravity() == 180) ? MATRIX_A : MATRIX_B;
 }
 
 void resetTime() {
@@ -256,9 +256,13 @@ boolean dropParticleLong() {
   if (d.Timeout()) {
     d.Delay(getDelayDrop() * 1000);
     if (gravity == 0 || gravity == 180) {
-      if (lc.getRawXY(MATRIX_B, 7, 7) && !lc.getRawXY(MATRIX_A, 0, 0)) {
-        lc.invertRawXY(MATRIX_B, 7, 7);
-        lc.invertRawXY(MATRIX_A, 0, 0);
+      int top = (gravity == 180) ? MATRIX_B : MATRIX_A;
+      int bottom = (gravity == 180) ? MATRIX_A : MATRIX_B;
+      byte topCoord = (top == MATRIX_A) ? 0 : 7;
+      byte bottomCoord = (bottom == MATRIX_A) ? 0 : 7;
+      if (lc.getRawXY(top, topCoord, topCoord) && !lc.getRawXY(bottom, bottomCoord, bottomCoord)) {
+        lc.invertRawXY(top, topCoord, topCoord);
+        lc.invertRawXY(bottom, bottomCoord, bottomCoord);
         tone(BUZZ_PIN, 440, 10);
         return true;
       }
