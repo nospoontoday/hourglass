@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "author": "AnonEngineering",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-arduino-nano", "id": "nano", "top": -120, "left": 57.1, "attrs": {} },
+    {
+      "type": "wokwi-max7219-matrix",
+      "id": "matrix1",
+      "top": -398.27,
+      "left": 168.01,
+      "rotate": 315,
+      "attrs": { "chain": "1", "color": "limegreen" }
+    },
+    {
+      "type": "wokwi-max7219-matrix",
+      "id": "matrix2",
+      "top": -292.67,
+      "left": 168.01,
+      "rotate": 315,
+      "attrs": { "chain": "1", "color": "limegreen" }
+    },
+    {
+      "type": "wokwi-max7219-matrix",
+      "id": "matrix3",
+      "top": -398.27,
+      "left": 14.41,
+      "rotate": 315,
+      "attrs": { "chain": "1" }
+    },
+    {
+      "type": "wokwi-max7219-matrix",
+      "id": "matrix4",
+      "top": -292.67,
+      "left": 14.41,
+      "rotate": 315,
+      "attrs": { "chain": "1" }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz1",
+      "top": -141.6,
+      "left": -27,
+      "attrs": { "volume": "0.1" }
+    },
+    { "type": "wokwi-gnd", "id": "gnd3", "top": -316.8, "left": 162.6, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd4", "top": -316.8, "left": 9, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd5", "top": 9.6, "left": 191.4, "attrs": {} },
+    {
+      "type": "wokwi-mpu6050",
+      "id": "imu1",
+      "top": -343.22,
+      "left": 376.48,
+      "rotate": 180,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [ "nano:A0", "bz1:2", "purple", [ "v28.8", "h-96", "v-28.8" ] ],
+    [ "matrix1:V+.2", "matrix2:V+", "", [ "v-0.55", "h-28.25" ] ],
+    [ "matrix1:GND.2", "matrix2:GND", "", [ "v2.27", "h80.16" ] ],
+    [ "matrix1:DOUT", "matrix2:DIN", "", [ "v5.08", "h82.97" ] ],
+    [ "matrix1:CS.2", "matrix2:CS", "", [ "v7.89", "h76.18" ] ],
+    [ "matrix1:CLK.2", "matrix2:CLK", "", [ "v10.7", "h79" ] ],
+    [ "gnd3:GND", "matrix1:GND.2", "black", [ "v0" ] ],
+    [ "gnd4:GND", "matrix3:GND.2", "black", [ "v0" ] ],
+    [ "matrix3:V+.2", "matrix4:V+", "", [ "v-0.55", "h77.35" ] ],
+    [ "matrix3:GND.2", "matrix4:GND", "", [ "v2.27", "h80.16" ] ],
+    [ "matrix3:DOUT", "matrix4:DIN", "", [ "v5.08", "h82.97" ] ],
+    [ "matrix3:CS.2", "matrix4:CS", "", [ "v7.89", "h76.18" ] ],
+    [ "matrix3:CLK.2", "matrix4:CLK", "", [ "v10.7", "h79" ] ],
+    [ "matrix2:DOUT", "matrix3:DIN", "blue", [ "v5.08", "h-32.23", "v-192", "h-44.02" ] ],
+    [ "matrix2:CS.2", "matrix3:CS", "#8f4814", [ "v7.89", "h-48.62", "v-192", "h-27.64" ] ],
+    [ "matrix2:CLK.2", "matrix3:CLK", "orange", [ "v10.7", "h-65", "v-192" ] ],
+    [ "nano:5", "matrix1:DIN", "blue", [ "v-57.6", "h153.6", "v-230.4", "h-34.42" ] ],
+    [ "nano:4", "matrix1:CS", "#8f4814", [ "v-48", "h153.6", "v-230.4", "h-37.24" ] ],
+    [ "nano:3", "matrix1:CLK", "orange", [ "v-38.4", "h153.6", "v-230.4", "h-40.05" ] ],
+    [ "gnd5:GND", "nano:GND.1", "black", [ "v0" ] ],
+    [ "nano:A5", "imu1:SCL", "orange", [ "v38.4", "h249.92" ] ],
+    [ "nano:A4", "imu1:SDA", "green", [ "v48", "h269.12" ] ],
+    [ "nano:5V", "imu1:VCC", "red", [ "v28.8", "h172.8", "v-230.4", "h29.12" ] ],
+    [ "gnd5:GND", "imu1:GND", "black", [ "v-9.6", "h192.32" ] ],
+    [ "gnd5:GND", "bz1:1", "black", [ "v-9.6", "h-201.6" ] ],
+    [ "matrix3:V+", "matrix1:V+", "red", [ "v-28.8", "h153.6" ] ],
+    [ "matrix1:V+", "imu1:VCC", "red", [ "v-28.8", "h105.6", "v182.4", "h28.8" ] ]
+  ],
+  "dependencies": {}
+}
