@@ -5,10 +5,8 @@
 #include "LedControl.h"
 #include "Delay.h"
 
-#define MATRIX_A  3
-#define MATRIX_B  2
-#define MATRIX_C  1
-#define MATRIX_D  0
+#define MATRIX_A  1
+#define MATRIX_B  0
 // Values are 260/330/400
 //#define ACC_THRESHOLD_LOW 300
 //#define ACC_THRESHOLD_HIGH 600
@@ -17,7 +15,6 @@
 // This takes into account how the matrixes are mounted
 #define ROTATION_OFFSET 90
 #define DELAY_LONG 100
-#define DELAY_SHORT 20
 
 #define DEBUG_OUTPUT 1
 
@@ -44,10 +41,9 @@ byte delayMinutes = 1;
 int gravity;
 int resetCounter = 0;
 NonBlockDelay d;
-NonBlockDelay shortd;
 
 Adafruit_MPU6050 mpu;
-LedControl lc = LedControl(DATA_PIN, CLK_PIN, LOAD_PIN, 4);
+LedControl lc = LedControl(DATA_PIN, CLK_PIN, LOAD_PIN, 2);
 
 /**
    Get delay between particle drops (in seconds)
@@ -216,6 +212,7 @@ int getGravity() {//////////////////////////////////////////////////////////////
     Serial.println("270");
     return 270;
   }
+  return gravity;
 }
 
 int getTopMatrixLong() {
@@ -225,21 +222,12 @@ int getBottomMatrixLong() {
   return (getGravity() != 90) ? MATRIX_B : MATRIX_A;
 }
 
-int getTopMatrixShort() {
-  return (getGravity() == 90) ? MATRIX_C : MATRIX_D;
-}
-int getBottomMatrixShort() {
-  return (getGravity() != 90) ? MATRIX_D : MATRIX_C;
-}
-
 void resetTime() {
-  for (byte i = 0; i < 4; i++) {
+  for (byte i = 0; i < 2; i++) {
     lc.clearDisplay(i);
   }
   fill(getTopMatrixLong(), 60);
-  fill(getTopMatrixShort(), 60);
   d.Delay(getDelayDrop() * 1000);
-  shortd.Delay(getDelayDrop() * 500);
 }
 
 bool updateMatrixLong() {
@@ -264,28 +252,6 @@ bool updateMatrixLong() {
   return somethingMoved;
 }
 
-bool updateMatrixShort() {
-  int n = 8;
-  bool somethingMoved = false;
-  byte x, y;
-  bool direction;
-  for (byte slice = 0; slice < 2 * n - 1; ++slice) {
-    direction = (random(2) == 1);
-    byte z = slice < n ? 0 : slice - n + 1;
-    for (byte j = z; j <= slice - z; ++j) {
-      y = direction ? (7 - j) : (7 - (slice - j));
-      x = direction ? (slice - j) : j;
-      if (moveParticle(MATRIX_D, x, y)) {
-        somethingMoved = true;
-      };
-      if (moveParticle(MATRIX_C, x, y)) {
-        somethingMoved = true;
-      }
-    }
-  }
-  return somethingMoved;
-}
-
 boolean dropParticleLong() {
   if (d.Timeout()) {
     d.Delay(getDelayDrop() * 1000);
@@ -296,23 +262,6 @@ boolean dropParticleLong() {
         lc.invertRawXY(MATRIX_A, 0, 0);
         lc.invertRawXY(MATRIX_B, 7, 7);
         tone(BUZZ_PIN, 440, 10);
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-boolean dropParticleShort() {
-  if (shortd.Timeout()) {
-    shortd.Delay(getDelayDrop() * 500);
-    if (gravity == 0 || gravity == 180) {
-      if ((lc.getRawXY(MATRIX_C, 0, 0) && !lc.getRawXY(MATRIX_D, 7, 7)) ||
-          (!lc.getRawXY(MATRIX_C, 0, 0) && lc.getRawXY(MATRIX_D, 7, 7))
-         ) {
-        lc.invertRawXY(MATRIX_C, 0, 0);
-        lc.invertRawXY(MATRIX_D, 7, 7);
-        //tone(BUZZ_PIN, 440, 10);
         return true;
       }
     }
@@ -401,7 +350,7 @@ void setup() {
   }
   randomSeed(analogRead(A3));
 
-  for (byte i = 0; i < 4; i++) {
+  for (byte i = 0; i < 2; i++) {
     lc.shutdown(i, false);
     lc.setIntensity(i, 1);
   }
@@ -423,8 +372,6 @@ void loop() {
 
   bool moved = updateMatrixLong();
   bool dropped = dropParticleLong();
-  bool movedShort = updateMatrixShort();
-  bool droppedshort = dropParticleShort();
 
 
   if (!moved && !dropped && !alarmWentOff && (countParticles(getTopMatrixLong()) == 0)) {
