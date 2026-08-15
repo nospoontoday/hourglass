@@ -57,6 +57,11 @@ bool roundOver = false;
 int gravity;
 int lastPrintedSecond = -1;
 int lastPrintedGravity = -1;
+float lastAccelX = 0;
+float lastAccelY = 0;
+float lastAccelZ = 0;
+unsigned long badAccelReads = 0;
+unsigned long lastBadAccelLog = 0;
 int resetCounter = 0;
 unsigned long countdownEnd;
 NonBlockDelay d;
@@ -223,19 +228,53 @@ int getGravity() {//////////////////////////////////////////////////////////////
 
   //int x = analogRead(X_PIN);
   //int y = analogRead(Y_PIN);
+  float mag2 = a.acceleration.x * a.acceleration.x +
+               a.acceleration.y * a.acceleration.y +
+               a.acceleration.z * a.acceleration.z;
+  if (mag2 < 9.0f || mag2 > 625.0f) {
+#if DEBUG_OUTPUT
+    badAccelReads++;
+    unsigned long now = millis();
+    if (now - lastBadAccelLog > 1000) {
+      lastBadAccelLog = now;
+      Serial.print("MPU I2C bad read, skipped (");
+      Serial.print(badAccelReads);
+      Serial.println(" total)");
+    }
+#endif
+    return gravity;
+  }
+
+  int direction = gravity;
   if (y < ACC_THRESHOLD_LOW)  {
-    return 0;
+    direction = 0;
+  } else if (x > ACC_THRESHOLD_HIGH) {
+    direction = 90;
+  } else if (y > ACC_THRESHOLD_HIGH) {
+    direction = 180;
+  } else if (x < ACC_THRESHOLD_LOW)  {
+    direction = 270;
   }
-  if (x > ACC_THRESHOLD_HIGH) {
-    return 90;
+
+#if DEBUG_OUTPUT
+  if (a.acceleration.x - lastAccelX > 0.5 || lastAccelX - a.acceleration.x > 0.5 ||
+      a.acceleration.y - lastAccelY > 0.5 || lastAccelY - a.acceleration.y > 0.5 ||
+      a.acceleration.z - lastAccelZ > 0.5 || lastAccelZ - a.acceleration.z > 0.5) {
+    lastAccelX = a.acceleration.x;
+    lastAccelY = a.acceleration.y;
+    lastAccelZ = a.acceleration.z;
+    Serial.print("Accel X=");
+    Serial.print(a.acceleration.x, 1);
+    Serial.print(" Y=");
+    Serial.print(a.acceleration.y, 1);
+    Serial.print(" Z=");
+    Serial.print(a.acceleration.z, 1);
+    Serial.print(" gravity=");
+    Serial.println(direction);
   }
-  if (y > ACC_THRESHOLD_HIGH) {
-    return 180;
-  }
-  if (x < ACC_THRESHOLD_LOW)  {
-    return 270;
-  }
-  return gravity;
+#endif
+
+  return direction;
 }
 
 int getTopMatrixLong() {
@@ -508,18 +547,24 @@ static void processIncoming() {
 */
 void setup() {
   Serial.begin(9600);
+  Wire.setClock(100000);
     // Try to initialize!
-  mpuOk = mpu.begin();
-  for (int attempt = 1; attempt <= 5 && !mpuOk; attempt++) {
-    Serial.print("MPU6050 not found, retry ");
-    Serial.println(attempt);
-    delay(200);
-    mpuOk = mpu.begin();
+  uint8_t mpuAddresses[2] = {MPU6050_I2CADDR_DEFAULT, 0x69};
+  for (int i = 0; i < 2 && !mpuOk; i++) {
+    mpuOk = mpu.begin(mpuAddresses[i]);
+    for (int attempt = 1; attempt <= 5 && !mpuOk; attempt++) {
+      Serial.print("MPU6050 not found, retry ");
+      Serial.println(attempt);
+      delay(200);
+      mpuOk = mpu.begin(mpuAddresses[i]);
+    }
+    if (mpuOk) {
+      Serial.print("MPU6050 Found! address=0x");
+      Serial.println(mpuAddresses[i], HEX);
+    }
   }
   if (!mpuOk) {
     Serial.println("Failed to find MPU6050 chip - continuing without orientation sensor");
-  } else {
-    Serial.println("MPU6050 Found!");
   }
 
   if (mpuOk) {
